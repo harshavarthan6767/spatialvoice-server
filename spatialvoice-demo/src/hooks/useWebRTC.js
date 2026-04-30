@@ -1,6 +1,7 @@
 // src/hooks/useWebRTC.js
 import { useRef, useCallback, useState, useEffect } from 'react';
 import { createSpatialPeer, initAudioListener } from '../audio/spatialAudio';
+import { createNoiseSuppressedStream } from '../audio/createAECStream';
 
 const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -14,6 +15,7 @@ export function useWebRTC({ token, onPeerCount }) {
   const [status,  setStatus]  = useState('idle');
   const [micOn,   setMicOn]   = useState(false);
   const [error,   setError]   = useState(null);
+  const [usingWasm, setUsingWasm] = useState(false);
 
   const sig          = useRef(null);
   const pcs          = useRef({});           // peerId → RTCPeerConnection
@@ -21,6 +23,7 @@ export function useWebRTC({ token, onPeerCount }) {
   const audioCtx     = useRef(null);
   const spatialPeers = useRef({});           // peerId → { updatePosition, cleanup }
   const peerOrder    = useRef([]);
+  const wasmCleanup  = useRef(null);
 
   // ─── AudioContext + Listener (created once) ──────────────────────────────────
   useEffect(() => {
@@ -34,50 +37,71 @@ export function useWebRTC({ token, onPeerCount }) {
     };
   }, []);
 
-  // ─── Capture mic (simple, robust — no WASM) ──────────────────────────────────
-  const getMic = useCallback(async () => {
+  // ─── Capture mic (3-block try/catch) ─────────────────────────────────────────
+  const getMic = useCallback(async (enableNoiseReduction = true) => {
     if (localStream.current) return localStream.current; // already have it
+    setError(null);
 
-    // Resume AudioContext after user gesture
     if (audioCtx.current?.state === 'suspended') {
       await audioCtx.current.resume();
     }
 
+    // ─── Block 1: OS / Browser microphone permission ─────────────────────────
+    let rawStream;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      rawStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
+          autoGainControl: true,
           noiseSuppression: true,
-          autoGainControl:  true,
+          sampleRate: 48000,
+          channelCount: 1,
         },
         video: false,
       });
-      localStream.current = stream;
-      setMicOn(true);
-      return stream;
-    } catch (e) {
-      console.error('[Mic] getUserMedia failed:', e.name, e.message);
-      setError(`Mic: ${e.name} — check permissions in device settings`);
+    } catch (permissionError) {
+      console.error('[Mic] Permission denied:', permissionError);
+      setError(`Mic: ${permissionError.name} — check permissions in device settings`);
       return null;
     }
+
+    // ─── Block 2: WASM noise suppression (optional enhancement) ──────────────
+    let finalStream = rawStream;
+    if (enableNoiseReduction) {
+      try {
+        const handle = await createNoiseSuppressedStream(rawStream);
+        finalStream = handle.stream;
+        wasmCleanup.current = handle.cleanup;
+        setUsingWasm(true);
+        console.info('[RNNoise] WASM noise suppression active.');
+      } catch (wasmError) {
+        console.warn('[RNNoise] WASM unavailable, falling back to browser noiseSuppression:', wasmError);
+        setUsingWasm(false);
+      }
+    } else {
+      setUsingWasm(false);
+    }
+
+    localStream.current = finalStream;
+    // Keep reference to raw tracks so we can stop them later
+    localStream.current._rawTracks = rawStream.getTracks();
+    setMicOn(true);
+    return finalStream;
   }, []);
 
   // ─── Create RTCPeerConnection ────────────────────────────────────────────────
   const createPC = useCallback((remotePid) => {
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
 
-    // Add local tracks
     if (localStream.current) {
       localStream.current.getTracks().forEach(t =>
         pc.addTrack(t, localStream.current)
       );
     }
 
-    // Wire remote track through HRTF spatial audio
     pc.ontrack = ({ streams }) => {
       if (!streams[0]) return;
       const idx = peerOrder.current.indexOf(remotePid);
-      // Default positions: left, front, right
       const defaults = [
         { azimuth: -60, elevation: 5, distance: 1.2 },
         { azimuth:   0, elevation: 5, distance: 1.5 },
@@ -113,12 +137,15 @@ export function useWebRTC({ token, onPeerCount }) {
   }, []);
 
   // ─── Join room ───────────────────────────────────────────────────────────────
-  const joinRoom = useCallback(async (room) => {
+  const joinRoom = useCallback(async (room, enableNoiseReduction = true) => {
     setError(null);
     setStatus('connecting');
 
-    // Get mic before opening WebSocket
-    await getMic();
+    const stream = await getMic(enableNoiseReduction);
+    if (!stream) {
+      setStatus('idle');
+      return;
+    }
 
     const ws = new WebSocket(`${SERVER_WS}/ws/signal?token=${token}`);
     sig.current = ws;
@@ -129,7 +156,6 @@ export function useWebRTC({ token, onPeerCount }) {
 
     ws.onmessage = async ({ data }) => {
       const msg = JSON.parse(data);
-      console.log('[Signal]', msg.type, msg);
 
       switch (msg.type) {
         case 'joined': {
@@ -200,7 +226,7 @@ export function useWebRTC({ token, onPeerCount }) {
     };
   }, [createPC, getMic, token, onPeerCount]);
 
-  // ─── Update spatial position for a peer (called from App slider changes) ─────
+  // ─── Update spatial position for a peer ──────────────────────────────────────
   const updatePan = useCallback((speakerIdx, position, peerList) => {
     const pid = (peerList ?? peerOrder.current)[speakerIdx];
     if (!pid || !spatialPeers.current[pid]) return;
@@ -219,6 +245,10 @@ export function useWebRTC({ token, onPeerCount }) {
     Object.values(spatialPeers.current).forEach(sp => sp.cleanup());
     spatialPeers.current = {};
 
+    wasmCleanup.current?.();
+    wasmCleanup.current = null;
+
+    localStream.current?._rawTracks?.forEach(t => t.stop());
     localStream.current?.getTracks().forEach(t => t.stop());
     localStream.current = null;
 
@@ -226,6 +256,7 @@ export function useWebRTC({ token, onPeerCount }) {
     setPeers([]);
     setPeerId(null);
     setMicOn(false);
+    setUsingWasm(false);
     peerOrder.current = [];
   }, []);
 
@@ -235,11 +266,9 @@ export function useWebRTC({ token, onPeerCount }) {
     status,
     micOn,
     error,
+    usingWasm,
     joinRoom,
     leaveRoom,
     updatePan,
-    // Stubs so App.jsx doesn't crash
-    noiseReductionOn: false,
-    toggleNoiseReduction: () => {},
   };
 }

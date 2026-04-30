@@ -5,6 +5,13 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   assetsInclude: ['**/*.wasm'],
+  worker: {
+    format: 'es', // Required: ES module workers support top-level await + imports
+  },
+  optimizeDeps: {
+    // Emscripten modules have WASM side-effects; exclude from Vite's pre-bundler
+    exclude: ['@jitsi/rnnoise-wasm', 'speex-resampler'],
+  },
   server: {
     headers: {
       'Cross-Origin-Opener-Policy': 'same-origin',

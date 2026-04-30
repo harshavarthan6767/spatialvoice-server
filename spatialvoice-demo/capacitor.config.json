@@ -3,6 +3,7 @@
   "appName": "SpatialVoice",
   "webDir": "dist",
   "server": {
+    "androidScheme": "https",
     "url": "https://silly-rolypoly-8f40f3.netlify.app",
     "cleartext": false,
     "allowNavigation": ["*.onrender.com"]

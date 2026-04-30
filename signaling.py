@@ -16,7 +16,6 @@ rooms: dict[str, dict[str, WebSocket]] = defaultdict(dict)
 
 
 async def signaling_ws(websocket: WebSocket, username: str):
-    await websocket.accept()
     peer_id = str(uuid.uuid4())[:8]
     room_id = None
     print(f"[Signal] New connection: peer={peer_id} user={username}")

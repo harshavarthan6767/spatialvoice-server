@@ -5,3 +5,6 @@ spatialvoice-demo/node_modules/
 spatialvoice-demo/dist/
 spatialvoice-demo/android/
 *.apk
+
+# Local Netlify folder
+.netlify

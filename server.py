@@ -123,13 +123,18 @@ async def login(username: str = Form(...), password: str = Form(...)):
 @app.websocket('/ws/signal')
 async def signal_endpoint(websocket: WebSocket, token: str = ""):
     """WebRTC signaling — SDP offer/answer/ICE candidate relay."""
+    await websocket.accept()
     try:
         from auth import SECRET_KEY
         payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
         username = payload["sub"]
     except Exception:
-        await websocket.close(code=1008)   # Policy violation
+        await websocket.send_json({"type": "error", "msg": "Authentication failed (Invalid or missing token)"})
+        await websocket.close(code=1008)
         return
+    
+    # We pass the already-accepted websocket to signaling_ws
+    # but signaling_ws also calls websocket.accept(). We must remove it there too.
     await signaling_ws(websocket, username)
 
 

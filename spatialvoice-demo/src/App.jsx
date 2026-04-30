@@ -176,7 +176,10 @@ export default function App() {
     setPositions(prev => prev.map((p, i) => i === idx ? { ...p, [field]: val } : p));
   };
 
-  const { peerId, peers, status, micOn, error, joinRoom, leaveRoom, updatePan } = useWebRTC({
+  const {
+    peerId, peers, status, micOn, error,
+    joinRoom, leaveRoom, updatePan,
+  } = useWebRTC({
     token: token,
     onPeerCount: () => {},
   });
@@ -200,7 +203,9 @@ export default function App() {
 
   const handlePosChange = (idx, field, val) => {
     updatePos(idx, field, val);
-    if (field === 'azimuth') updatePan(idx, val);
+    // Get the updated position immediately since state hasn't flushed yet
+    const newPos = { ...positions[idx], [field]: val };
+    updatePan(idx, newPos, peers);
   };
 
   const statusStyle = {
@@ -285,7 +290,7 @@ export default function App() {
             <div className="incall-sub">ID: {peerId} · {peers.length} peer{peers.length !== 1 ? 's' : ''}</div>
           </div>
           <div className="incall-actions">
-            <button className={micOn ? 'btn-mic-on' : 'btn-mic-off'}>
+            <button className={micOn ? 'btn-mic-on' : 'btn-mic-off'} disabled>
               {micOn ? '🎤 On' : '🔇 Off'}
             </button>
             <button className="btn-leave" onClick={handleLeave}>✕ Leave Room</button>

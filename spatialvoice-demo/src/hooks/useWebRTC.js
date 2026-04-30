@@ -1,128 +1,131 @@
-// useWebRTC.js - Clean WebRTC hook with reliable audio via HTML Audio elements
-import { useRef, useState, useCallback } from "react";
+// src/hooks/useWebRTC.js
+import { useRef, useCallback, useState, useEffect } from 'react';
+import { createSpatialPeer, initAudioListener } from '../audio/spatialAudio';
 
-const ICE = [
-  { urls: "stun:stun.l.google.com:19302" },
-  { urls: "stun:stun1.l.google.com:19302" },
+const ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
 ];
-
-const SERVER_WS = import.meta.env.VITE_WS_URL ?? "ws://localhost:8001";
+const SERVER_WS = import.meta.env.VITE_WS_URL ?? 'ws://localhost:8001';
 
 export function useWebRTC({ token, onPeerCount }) {
   const [peerId,  setPeerId]  = useState(null);
   const [peers,   setPeers]   = useState([]);
-  const [status,  setStatus]  = useState('idle'); // idle | connecting | connected | error
+  const [status,  setStatus]  = useState('idle');
   const [micOn,   setMicOn]   = useState(false);
   const [error,   setError]   = useState(null);
 
   const sig          = useRef(null);
-  const pcs          = useRef({});          // peerId → RTCPeerConnection
+  const pcs          = useRef({});           // peerId → RTCPeerConnection
   const localStream  = useRef(null);
-  const audioEls     = useRef({});          // peerId → <audio> element
-  const panners      = useRef({});          // peerId → StereoPannerNode
   const audioCtx     = useRef(null);
+  const spatialPeers = useRef({});           // peerId → { updatePosition, cleanup }
+  const peerOrder    = useRef([]);
 
-  // Stereo positions for up to 3 callers: Left, Front, Right
-  const PAN_VALUES = [-0.9, 0, 0.9];
-  const peerOrder  = useRef([]);
+  // ─── AudioContext + Listener (created once) ──────────────────────────────────
+  useEffect(() => {
+    audioCtx.current = new (window.AudioContext || window.webkitAudioContext)({
+      latencyHint: 'interactive',
+    });
+    initAudioListener(audioCtx.current);
 
-  const getPan = (pid) => {
-    const idx = peerOrder.current.indexOf(pid);
-    return PAN_VALUES[idx] ?? 0;
-  };
-
-  // Play a remote stream with stereo panning
-  const playRemoteStream = useCallback((pid, stream) => {
-    // Use simple <audio> element — most reliable for WebRTC
-    let el = audioEls.current[pid];
-    if (!el) {
-      el = document.createElement('audio');
-      el.autoplay = true;
-      el.setAttribute('playsinline', '');
-      document.body.appendChild(el);
-      audioEls.current[pid] = el;
-    }
-    el.srcObject = stream;
-    el.play().catch(e => console.warn('[Audio] play():', e));
-
-    // Apply stereo panning via WebAudio
-    if (!audioCtx.current) {
-      audioCtx.current = new (window.AudioContext || window.webkitAudioContext)();
-    }
-    const ctx = audioCtx.current;
-    if (ctx.state === 'suspended') ctx.resume();
-
-    // Remove old panner if exists
-    if (panners.current[pid]) {
-      try { panners.current[pid].disconnect(); } catch {}
-    }
-
-    const src    = ctx.createMediaStreamSource(stream);
-    const panner = ctx.createStereoPanner();
-    panner.pan.value = getPan(pid);
-    src.connect(panner);
-    panner.connect(ctx.destination);
-    panners.current[pid] = panner;
-    console.log(`[Audio] Peer ${pid} → pan=${panner.pan.value}`);
+    return () => {
+      audioCtx.current?.close();
+    };
   }, []);
 
-  // Update pan for a specific peer index
-  const updatePan = useCallback((speakerIdx, azimuth) => {
-    const pid = peerOrder.current[speakerIdx];
-    if (!pid || !panners.current[pid]) return;
-    panners.current[pid].pan.value = Math.max(-1, Math.min(1, azimuth / 90));
-  }, []);
+  // ─── Capture mic (simple, robust — no WASM) ──────────────────────────────────
+  const getMic = useCallback(async () => {
+    if (localStream.current) return localStream.current; // already have it
 
-  const createPC = useCallback((remotePid) => {
-    const pc = new RTCPeerConnection({ iceServers: ICE });
-
-    pc.onicecandidate = ({ candidate }) => {
-      if (candidate && sig.current?.readyState === WebSocket.OPEN) {
-        sig.current.send(JSON.stringify({ type:'ice', to:remotePid, data:candidate }));
-      }
-    };
-
-    pc.ontrack = ({ streams }) => {
-      if (!streams[0]) return;
-      console.log('[WebRTC] Remote track from', remotePid);
-      playRemoteStream(remotePid, streams[0]);
-    };
-
-    pc.onconnectionstatechange = () => {
-      console.log(`[WebRTC] ${remotePid}: ${pc.connectionState}`);
-    };
-
-    if (localStream.current) {
-      localStream.current.getTracks().forEach(t => pc.addTrack(t, localStream.current));
+    // Resume AudioContext after user gesture
+    if (audioCtx.current?.state === 'suspended') {
+      await audioCtx.current.resume();
     }
 
-    pcs.current[remotePid] = pc;
-    return pc;
-  }, [playRemoteStream]);
-
-  const joinRoom = useCallback(async (room) => {
-    setError(null);
-    setStatus('connecting');
-
-    // Get mic FIRST so it's available when peer connections are created
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 48000 },
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl:  true,
+        },
         video: false,
       });
       localStream.current = stream;
       setMicOn(true);
+      return stream;
     } catch (e) {
-      console.warn('[Mic] denied:', e.message);
-      setError('Microphone denied — you can still hear others');
+      console.error('[Mic] getUserMedia failed:', e.name, e.message);
+      setError(`Mic: ${e.name} — check permissions in device settings`);
+      return null;
     }
+  }, []);
+
+  // ─── Create RTCPeerConnection ────────────────────────────────────────────────
+  const createPC = useCallback((remotePid) => {
+    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+
+    // Add local tracks
+    if (localStream.current) {
+      localStream.current.getTracks().forEach(t =>
+        pc.addTrack(t, localStream.current)
+      );
+    }
+
+    // Wire remote track through HRTF spatial audio
+    pc.ontrack = ({ streams }) => {
+      if (!streams[0]) return;
+      const idx = peerOrder.current.indexOf(remotePid);
+      // Default positions: left, front, right
+      const defaults = [
+        { azimuth: -60, elevation: 5, distance: 1.2 },
+        { azimuth:   0, elevation: 5, distance: 1.5 },
+        { azimuth:  60, elevation: 5, distance: 1.2 },
+      ];
+      const pos = defaults[idx] ?? { azimuth: 0, elevation: 5, distance: 1.5 };
+
+      spatialPeers.current[remotePid]?.cleanup();
+      spatialPeers.current[remotePid] = createSpatialPeer(
+        audioCtx.current,
+        streams[0],
+        pos
+      );
+      console.log(`[Audio] HRTF peer ${remotePid} → az=${pos.azimuth}`);
+    };
+
+    pc.onicecandidate = ({ candidate }) => {
+      if (candidate && sig.current?.readyState === WebSocket.OPEN) {
+        sig.current.send(JSON.stringify({ type: 'ice', to: remotePid, data: candidate }));
+      }
+    };
+
+    pc.onconnectionstatechange = () => {
+      console.log(`[WebRTC] ${remotePid}: ${pc.connectionState}`);
+      if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
+        spatialPeers.current[remotePid]?.cleanup();
+        delete spatialPeers.current[remotePid];
+      }
+    };
+
+    pcs.current[remotePid] = pc;
+    return pc;
+  }, []);
+
+  // ─── Join room ───────────────────────────────────────────────────────────────
+  const joinRoom = useCallback(async (room) => {
+    setError(null);
+    setStatus('connecting');
+
+    // Get mic before opening WebSocket
+    await getMic();
 
     const ws = new WebSocket(`${SERVER_WS}/ws/signal?token=${token}`);
     sig.current = ws;
 
-    ws.onopen  = () => ws.send(JSON.stringify({ type:'join', room }));
+    ws.onopen  = () => ws.send(JSON.stringify({ type: 'join', room }));
     ws.onerror = () => { setError('Server unreachable — is the server running?'); setStatus('error'); };
-    ws.onclose = (e) => { if (e.code !== 1000) { setStatus('error'); } };
+    ws.onclose = (e) => { if (e.code !== 1000) setStatus('error'); };
 
     ws.onmessage = async ({ data }) => {
       const msg = JSON.parse(data);
@@ -131,76 +134,112 @@ export function useWebRTC({ token, onPeerCount }) {
       switch (msg.type) {
         case 'joined': {
           setPeerId(msg.peer_id);
-          setStatus('connected');
           setPeers(msg.peers);
           peerOrder.current = [...msg.peers];
+          setStatus('connected');
           onPeerCount?.(msg.peers.length);
+
           for (const rp of msg.peers) {
             const pc    = createPC(rp);
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
-            ws.send(JSON.stringify({ type:'offer', to:rp, data:offer }));
+            ws.send(JSON.stringify({ type: 'offer', to: rp, data: offer }));
           }
           break;
         }
         case 'peer_joined': {
-          peerOrder.current = [...peerOrder.current, msg.peer_id];
-          setPeers(p => [...new Set([...p, msg.peer_id])]);
-          onPeerCount?.(peerOrder.current.length);
+          setPeers(prev => {
+            const next = [...prev, msg.peer_id];
+            peerOrder.current = next;
+            onPeerCount?.(next.length);
+            return next;
+          });
+          break;
+        }
+        case 'peer_left': {
+          setPeers(prev => {
+            const next = prev.filter(x => x !== msg.peer_id);
+            peerOrder.current = next;
+            onPeerCount?.(next.length);
+            return next;
+          });
+          pcs.current[msg.peer_id]?.close();
+          delete pcs.current[msg.peer_id];
+          spatialPeers.current[msg.peer_id]?.cleanup();
+          delete spatialPeers.current[msg.peer_id];
           break;
         }
         case 'offer': {
-          const pc = createPC(msg.from);
+          const pc = pcs.current[msg.from] || createPC(msg.from);
           await pc.setRemoteDescription(new RTCSessionDescription(msg.data));
-          const ans = await pc.createAnswer();
-          await pc.setLocalDescription(ans);
-          ws.send(JSON.stringify({ type:'answer', to:msg.from, data:ans }));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          ws.send(JSON.stringify({ type: 'answer', to: msg.from, data: answer }));
           break;
         }
-        case 'answer':
-          await pcs.current[msg.from]?.setRemoteDescription(new RTCSessionDescription(msg.data));
+        case 'answer': {
+          await pcs.current[msg.from]?.setRemoteDescription(
+            new RTCSessionDescription(msg.data)
+          );
           break;
-        case 'ice':
-          await pcs.current[msg.from]?.addIceCandidate(new RTCIceCandidate(msg.data));
+        }
+        case 'ice': {
+          await pcs.current[msg.from]?.addIceCandidate(
+            new RTCIceCandidate(msg.data)
+          );
           break;
-        case 'peer_left':
-          pcs.current[msg.peer_id]?.close();
-          delete pcs.current[msg.peer_id];
-          // Remove audio element
-          if (audioEls.current[msg.peer_id]) {
-            audioEls.current[msg.peer_id].srcObject = null;
-            audioEls.current[msg.peer_id].remove();
-            delete audioEls.current[msg.peer_id];
-          }
-          peerOrder.current = peerOrder.current.filter(p => p !== msg.peer_id);
-          setPeers(p => p.filter(id => id !== msg.peer_id));
-          onPeerCount?.(peerOrder.current.length);
-          break;
-        case 'error':
+        }
+        case 'error': {
           setError(msg.msg);
+          setStatus('error');
+          ws.close();
           break;
+        }
         default: break;
       }
     };
-  }, [createPC]);
+  }, [createPC, getMic, token, onPeerCount]);
 
+  // ─── Update spatial position for a peer (called from App slider changes) ─────
+  const updatePan = useCallback((speakerIdx, position, peerList) => {
+    const pid = (peerList ?? peerOrder.current)[speakerIdx];
+    if (!pid || !spatialPeers.current[pid]) return;
+    spatialPeers.current[pid].updatePosition(position);
+  }, []);
+
+  // ─── Leave room ──────────────────────────────────────────────────────────────
   const leaveRoom = useCallback(() => {
-    sig.current?.send(JSON.stringify({ type:'leave' }));
-    sig.current?.close(1000);
+    sig.current?.send(JSON.stringify({ type: 'leave' }));
+    sig.current?.close();
+    sig.current = null;
+
     Object.values(pcs.current).forEach(pc => pc.close());
-    Object.values(audioEls.current).forEach(el => { el.srcObject=null; el.remove(); });
-    localStream.current?.getTracks().forEach(t => t.stop());
     pcs.current = {};
-    audioEls.current = {};
-    panners.current = {};
-    peerOrder.current = [];
+
+    Object.values(spatialPeers.current).forEach(sp => sp.cleanup());
+    spatialPeers.current = {};
+
+    localStream.current?.getTracks().forEach(t => t.stop());
     localStream.current = null;
+
     setStatus('idle');
     setPeers([]);
     setPeerId(null);
     setMicOn(false);
-    setError(null);
+    peerOrder.current = [];
   }, []);
 
-  return { peerId, peers, status, micOn, error, joinRoom, leaveRoom, updatePan };
+  return {
+    peerId,
+    peers,
+    status,
+    micOn,
+    error,
+    joinRoom,
+    leaveRoom,
+    updatePan,
+    // Stubs so App.jsx doesn't crash
+    noiseReductionOn: false,
+    toggleNoiseReduction: () => {},
+  };
 }

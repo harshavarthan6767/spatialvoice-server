@@ -1,0 +1,17 @@
+{
+  "appId": "com.spatialvoice.app",
+  "appName": "SpatialVoice",
+  "webDir": "dist",
+  "server": {
+    "url": "https://spatialvoice.netlify.app",
+    "cleartext": false,
+    "allowNavigation": ["*.onrender.com"]
+  },
+  "android": {
+    "allowMixedContent": false,
+    "backgroundColor": "#000000"
+  },
+  "plugins": {
+    "CapacitorHttp": { "enabled": true }
+  }
+}

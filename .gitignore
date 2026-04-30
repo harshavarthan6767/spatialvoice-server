@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+.env
+spatialvoice-demo/node_modules/
+spatialvoice-demo/dist/
+spatialvoice-demo/android/
+*.apk

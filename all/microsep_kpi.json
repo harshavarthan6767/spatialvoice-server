@@ -1,0 +1,14 @@
+{
+  "microsep.onnx": {
+    "mean_ms": 47.31,
+    "p95_ms": 108.99,
+    "size_mb": 0.19,
+    "kpi_size_pass": true
+  },
+  "microsep_int8.onnx": {
+    "mean_ms": 314.81,
+    "p95_ms": 502.51,
+    "size_mb": 0.25,
+    "kpi_size_pass": true
+  }
+}

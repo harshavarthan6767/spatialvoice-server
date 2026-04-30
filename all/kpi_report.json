@@ -1,0 +1,42 @@
+{
+  "hackathon": "Samsung ennovateX AX Hackathon 2026",
+  "problem": "PS08 \u2014 Immersive Spatial Voice Call Experience with AI",
+  "team": "SoundScape AI",
+  "model": "SpatialNet (HRTF-Net)",
+  "dataset": "MIT KEMAR / ARI / Synthetic HRTF",
+  "synthetic": false,
+  "training": {
+    "epochs": 15,
+    "final_loss": 0.01259,
+    "optimizer": "Adam",
+    "lr_initial": 0.001,
+    "filter_length": 128
+  },
+  "fp32": {
+    "file": "spatialnet.onnx",
+    "size_mb": 0.0122,
+    "kpi_size_pass": true,
+    "latency_mean_ms": 0.0193,
+    "latency_p50_ms": 0.017,
+    "latency_p95_ms": 0.032,
+    "latency_p99_ms": 0.0606,
+    "latency_max_ms": 0.2802,
+    "kpi_latency_pass": true,
+    "headroom_latency": "1034x under 20ms limit",
+    "headroom_size": "4102x under 50MB limit"
+  },
+  "int8": {
+    "file": "spatialnet_int8_static.onnx",
+    "size_mb": 0.1266,
+    "kpi_size_pass": true,
+    "latency_mean_ms": 0.0616,
+    "latency_p50_ms": 0.0574,
+    "latency_p95_ms": 0.0762,
+    "latency_p99_ms": 0.1062,
+    "latency_max_ms": 0.185,
+    "kpi_latency_pass": true,
+    "headroom_latency": "325x under 20ms limit",
+    "headroom_size": "395x under 50MB limit"
+  },
+  "generated_at": "2026-04-29 23:47:00 UTC"
+}

@@ -1,0 +1,10 @@
+{
+  "position_lstm_int8.onnx": {
+    "mean_ms": 0.1117,
+    "p95_ms": 0.1727,
+    "fp32_mb": 0.009,
+    "int8_mb": 0.895,
+    "kpi_size_pass": true,
+    "kpi_latency_pass": true
+  }
+}

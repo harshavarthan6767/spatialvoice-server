@@ -45,8 +45,43 @@ html, body, #root {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-  max-width: 430px;
+  width: 100%;
+  max-width: 1000px;
   margin: 0 auto;
+}
+
+.main-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.left-panel, .right-panel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+@media (min-width: 768px) {
+  .main-content {
+    flex-direction: row;
+    gap: 24px;
+    padding: 20px 24px;
+    align-items: flex-start;
+  }
+  .left-panel {
+    flex: 0 0 320px;
+    position: sticky;
+    top: 80px;
+  }
+  .right-panel {
+    flex: 1;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    overflow: hidden;
+  }
+  .join-box { border-bottom: 1px solid var(--border); }
 }
 
 /* ── Safe Areas ──────────────────────────────────────────────────── */
@@ -241,6 +276,17 @@ html, body, #root {
   padding: 12px 20px;
   overflow-x: auto;
   scrollbar-width: none;
+}
+@media (min-width: 768px) {
+  .kpi-strip {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    padding: 0;
+    margin-top: 10px;
+    overflow-x: visible;
+  }
+  .kpi { min-width: 0; }
 }
 .kpi-strip::-webkit-scrollbar { display: none; }
 

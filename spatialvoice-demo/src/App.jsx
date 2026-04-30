@@ -243,15 +243,22 @@ export default function App() {
       {/* Error */}
       {error && <div className="error-bar">⚠ {error}</div>}
 
-      {/* Sphere */}
-      <div className="sphere-wrap">
-        <Sphere positions={positions} active={inCall} />
-        <p className="sphere-caption">
-          {inCall ? 'Use headphones for full 3D effect' : 'Join a room to start the call'}
-        </p>
-      </div>
+      {/* Main Content Grid */}
+      <div className="main-content">
+        <div className="left-panel">
+          {/* Sphere */}
+          <div className="sphere-wrap">
+            <Sphere positions={positions} active={inCall} />
+            <p className="sphere-caption">
+              {inCall ? 'Use headphones for full 3D effect' : 'Join a room to start the call'}
+            </p>
+          </div>
+          {/* KPIs */}
+          <KPIs inCall={inCall} peerCount={peers.length} micOn={micOn} />
+        </div>
 
-      {/* Join / In-call */}
+        <div className="right-panel">
+          {/* Join / In-call */}
       {!inCall ? (
         <div className="join-box">
           <p className="join-label">Enter a room code — everyone with the same code joins the same 3D call</p>
@@ -287,11 +294,8 @@ export default function App() {
         </div>
       )}
 
-      {/* KPIs */}
-      <KPIs inCall={inCall} peerCount={peers.length} micOn={micOn} />
-
-      {/* Speaker cards */}
-      <div className="speakers">
+          {/* Speaker cards */}
+          <div className="speakers">
         <div className="sec-head">
           <span className="sec-title">3D Positions</span>
           <span className="sec-badge">{peers.length} / 3 callers</span>
@@ -320,7 +324,9 @@ export default function App() {
               active={inCall && i < peers.length} />
           ))}
         </div>
-      </div>
+        </div>
+          </div>
+        </div>
 
       <div className="safe-bottom" />
     </div>

@@ -128,8 +128,8 @@ async def signal_endpoint(websocket: WebSocket, token: str = ""):
         from auth import SECRET_KEY
         payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
         username = payload["sub"]
-    except Exception:
-        await websocket.send_json({"type": "error", "msg": "Authentication failed (Invalid or missing token)"})
+    except Exception as e:
+        await websocket.send_json({"type": "error", "msg": f"Authentication failed: {str(e)}"})
         await websocket.close(code=1008)
         return
     
